@@ -28,7 +28,7 @@
         
         text-shadow: 0 0 2px var(--term-glow), 0 0 8px var(--term-glow);
         -webkit-font-smoothing: none;
-        touch-action: none; /* Prevent default touch actions like scroll/zoom */
+        touch-action: manipulation; /* Allow panel scrolling; canvas blocks touch */
       }
 
       /* Retro Scrollbar */
@@ -92,6 +92,7 @@
       canvas {
         display: block;
         image-rendering: pixelated; 
+        touch-action: none;
       }
       
       #canvas-container {
@@ -101,6 +102,7 @@
         top: 0;
         left: 0;
         z-index: 1;
+        touch-action: none;
       }
       
       #ui-layer {
@@ -263,7 +265,7 @@
       #status-toggle-btn { top: 20px; left: 20px; z-index: 100; position: absolute; }
       #config-btn { top: 20px; right: 20px; z-index: 100; position: absolute; }
       #sim-toggle-btn { bottom: 20px; right: 20px; z-index: 100; position: absolute; }
-      #loc-btn { bottom: 20px; left: 20px; z-index: 100; display: none; position: absolute; }
+      #loc-btn { bottom: 20px; left: 20px; z-index: 100; position: absolute; }
 
       /* Docked Panels */
       #stats-panel { top: 70px; left: 20px; display: none; }
@@ -399,12 +401,14 @@
           opacity: 1 !important;
           padding: 8px 16px !important;
           box-shadow: 0 0 10px rgba(0,255,0,0.3) !important;
-          bottom: 30px !important;
-          width: auto !important;
-          left: 50% !important;
-          transform: translateX(-50%) !important;
+          position: static !important;
+          bottom: auto !important;
+          width: 100% !important;
+          left: auto !important;
+          transform: none !important;
           text-shadow: 0 0 5px var(--term-glow) !important;
-          z-index: 100 !important;
+          z-index: 101 !important;
+          margin-top: 6px !important;
           cursor: none !important;
       }
 
@@ -459,8 +463,14 @@
           border-right: none;
           border-bottom: none;
           overflow-y: auto;
+          -webkit-overflow-scrolling: touch;
+          touch-action: pan-y;
           box-sizing: border-box;
           background: rgba(0, 15, 0, 0.98);
+        }
+        
+        #target-panel > * {
+          flex: 0 0 auto;
         }
 
         #config-modal {
@@ -503,7 +513,7 @@
   }
 }
 </script>
-    <script type="module" crossorigin src="./assets/index-9F3EZIK1.js"></script>
+    <script type="module" crossorigin src="./assets/index-BGqo_-Is.js"></script>
   </head>
   <body>
     <!-- Custom Cursor -->
@@ -571,19 +581,18 @@
             <h2 id="target-title">TARGET ANALYSIS</h2>
             <button class="panel-close" id="target-close">X</button>
         </div>
+        <label>EMISSION SPECTROGRAPH</label>
+        <div id="spectrograph">
+             <!-- Lines injected via JS -->
+        </div>
+        <!-- New Elemental Composition Readout -->
+        <div id="t-composition" style="font-size: 0.8rem; color: #aaffaa; margin-top: 5px; white-space: pre-wrap; text-shadow: none;"></div>
         <div class="data-row"><span class="data-label">DESIGNATION:</span> <span class="data-val" id="t-name">UNKNOWN</span></div>
         <div class="data-row"><span class="data-label">TYPE:</span> <span class="data-val" id="t-type">ANALYZING...</span></div>
         <div class="data-row"><span class="data-label">AGE:</span> <span class="data-val" id="t-age">0.0 Bn YR</span></div>
         <div class="data-row"><span class="data-label">MASS:</span> <span class="data-val" id="t-mass">0.0 M☉</span></div>
         <div class="data-row"><span class="data-label">RADIUS:</span> <span class="data-val" id="t-rad">0.0 R☉</span></div>
         <div class="data-row"><span class="data-label">LUMINOSITY:</span> <span class="data-val" id="t-lum">0.0 L☉</span></div>
-        
-        <label style="margin-top: 10px;">EMISSION SPECTROGRAPH</label>
-        <div id="spectrograph">
-             <!-- Lines injected via JS -->
-        </div>
-        <!-- New Elemental Composition Readout -->
-        <div id="t-composition" style="font-size: 0.8rem; color: #aaffaa; margin-top: 5px; white-space: pre-wrap; text-shadow: none;"></div>
         
         <button id="warp-btn">INITIATE HYPERDRIVE</button>
       </div>
@@ -611,6 +620,11 @@
         <div class="control-group left-align checkbox-group">
             <input type="checkbox" id="crt-toggle" checked>
             <label for="crt-toggle">CRT SCANLINES</label>
+        </div>
+
+        <div class="control-group left-align" style="flex-direction: column; align-items: flex-start;">
+            <label>VR MODE</label>
+            <div id="vr-button-container" style="width: 100%"></div>
         </div>
       </div>
 

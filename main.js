@@ -97,6 +97,52 @@ let clock = new THREE.Clock();
 
 let isDragging = false;
 let dragStartPos = new THREE.Vector2();
+const tmpWorldPos = new THREE.Vector3();
+const tmpPickPos = new THREE.Vector3();
+const tmpPickNdc = new THREE.Vector3();
+
+function formatCoord(value) {
+    const abs = Math.abs(value);
+    if (abs >= 1e7) return value.toExponential(2);
+    if (abs >= 1e4) return Math.round(value).toLocaleString();
+    return value.toFixed(1);
+}
+
+function getSmbhInfo() {
+    const baseSeed = (simState.activeGalaxyData?.designation || `SEED-${CONFIG.seed}`).split('')
+        .reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) >>> 0, 0);
+    const isQuasar = /QUASAR|AGN/i.test(simState.activeGalaxyData?.type || '');
+    const mass = 1_000_000 + (baseSeed % 9_000_000);
+    const radius = (0.02 + (baseSeed % 400) / 10_000).toFixed(3); // purely cosmetic
+    return {
+        designation: simState.activeGalaxyData?.designation
+            ? `${simState.activeGalaxyData.designation} ${isQuasar ? 'QUASAR' : 'CORE'}`
+            : (isQuasar ? "QUASAR CORE" : "GALACTIC CORE"),
+        typeObj: { id: 'BH', color: 0x00ff00 },
+        state: 'REMNANT',
+        age: simState.universeSimTime.toFixed(3),
+        mass: mass.toLocaleString(),
+        radius,
+        lum: isQuasar ? "ACTIVE" : "0",
+        spectrum: [],
+        composition: isQuasar
+            ? `AGN: ACTIVE (QUASAR)\nACCRETION: EXTREME\nMASS: ${mass.toLocaleString()} M☉`
+            : `EVENT HORIZON: STABLE\nACCRETION: ACTIVE\nMASS: ${mass.toLocaleString()} M☉`
+    };
+}
+
+function queueAutopilotGalaxyPriorityTargets() {
+    simState.autopilotPriorityTargets = [];
+    if (!simState.isAutopilot) return;
+    if (simState.viewLevel !== 1) return;
+    if (!smbhGroup || smbhGroup.children.length === 0) return;
+
+    const data = getSmbhInfo();
+    smbhGroup.children.forEach((obj) => {
+        if (!obj || typeof obj.getWorldPosition !== 'function') return;
+        simState.autopilotPriorityTargets.push({ object: obj, data });
+    });
+}
 
 // Lensing Globals
 let lensingPass, crtPass;
@@ -137,6 +183,7 @@ let simState = {
     lastGalaxyVisitTime: 0,
     autopilotZooming: false,
     autopilotPanelHidden: false,
+    autopilotPriorityTargets: [],
     planetTourIndex: 0,
     trackingTarget: null,
     inspectingTarget: null,
@@ -167,7 +214,7 @@ const elRetroVal = document.getElementById('retro-val');
 const elCrtToggle = document.getElementById('crt-toggle');
 const elAutopilotToggle = document.getElementById('autopilot-toggle');
 const elCrtOverlay = document.getElementById('crt-overlay');
-const elStatusToggle = document.getElementById('status-toggle-btn');
+let elStatusToggle = document.getElementById('status-toggle-btn');
 const elSimToggle = document.getElementById('sim-toggle-btn');
 const elStatusPanel = document.getElementById('stats-panel');
 const elSimPanel = document.getElementById('controls-panel');
@@ -229,15 +276,15 @@ function init() {
     container.appendChild(renderer.domElement);
     
     // VR Support
+    const oldVrBtn = document.getElementById('VRButton');
+    if(oldVrBtn) oldVrBtn.remove();
     const vrButton = VRButton.createButton(renderer);
     vrButton.id = 'VRButton'; 
     vrButton.addEventListener('click', () => {
         if (vrButton.innerHTML.includes('NOT SUPPORTED')) vrButton.style.display = 'none';
     });
-    // Remove old VR button if exists to avoid duplicates during re-init
-    const oldVrBtn = document.getElementById('VRButton');
-    if(oldVrBtn) oldVrBtn.remove();
-    document.body.appendChild(vrButton);
+    const vrContainer = document.getElementById('vr-button-container');
+    (vrContainer || document.body).appendChild(vrButton);
     setTimeout(() => {
         if (vrButton && vrButton.innerHTML.includes('NOT SUPPORTED')) vrButton.style.display = 'none';
     }, 10000);
@@ -457,7 +504,7 @@ function setupUIEvents() {
         return newBtn;
     };
 
-    bindToggle('status-toggle-btn', 'stats-panel');
+    elStatusToggle = bindToggle('status-toggle-btn', 'stats-panel') || elStatusToggle;
     bindToggle('sim-toggle-btn', 'controls-panel');
     bindToggle('config-btn', 'config-modal');
     
@@ -476,7 +523,33 @@ function setupUIEvents() {
         simState.autopilotPanelHidden = false;
         if (elTargetPanel.style.display === 'flex') { elTargetPanel.style.display = 'none'; return; }
         checkMobile(elTargetPanel);
-        let d = simState.viewLevel === 1 ? simState.activeGalaxyData : (simState.viewLevel === 2 ? simState.activeSystemData : null);
+        let d = null;
+        if (simState.viewLevel === 0) {
+            d = {
+                designation: `UNIVERSE 0x${CONFIG.seed.toString(16).toUpperCase()}`,
+                type: "COSMIC WEB",
+                age: simState.universeSimTime.toFixed(2),
+                mass: `${CONFIG.starCount.toLocaleString()} OBJECTS`,
+                radius: `${(SCALES.UNIVERSE / 1_000_000).toFixed(1)} MLY`,
+                lum: "N/A",
+                composition: `SEED: 0x${CONFIG.seed.toString(16).toUpperCase()}\nOBJECTS: ${CONFIG.starCount.toLocaleString()}`
+            };
+        } else if (simState.viewLevel === 1) {
+            d = simState.activeGalaxyData;
+        } else if (simState.viewLevel === 2) {
+            if (simState.inspectingTarget && simState.inspectingTarget.userData && simState.inspectingTarget.userData.type) {
+                const t = simState.inspectingTarget;
+                d = {
+                    designation: t.userData.designation || "UNKNOWN",
+                    type: t.userData.type || "UNKNOWN",
+                    age: simState.universeSimTime.toFixed(2),
+                    mass: "VAR",
+                    radius: "VAR",
+                    lum: "REFLECTIVE",
+                    composition: t.userData.composition || "ANALYZING..."
+                };
+            } else d = simState.activeSystemData;
+        }
         if (d) updateTargetPanel(d, true);
     });
 
@@ -523,6 +596,7 @@ function setupUIEvents() {
     elAutopilotToggle.onchange = (e) => {
         simState.isAutopilot = e.target.checked;
         if (simState.isAutopilot) { simState.autopilotNextAction = 0; simState.inspectingTarget = null; simState.autopilotPanelHidden = false; }
+        if (simState.isAutopilot && simState.viewLevel === 1 && simState.autopilotPriorityTargets.length === 0) queueAutopilotGalaxyPriorityTargets();
     };
     
     document.getElementById('timestep-slider').oninput = (e) => simState.timeScale = parseFloat(e.target.value);
@@ -552,13 +626,14 @@ function resetSimulation() {
     simState.galaxySimTime = 0; simState.isPaused = false;
     simState.isTransitioning = false; simState.viewLevel = 0; simState.worldOffset.set(0,0,0);
     simState.selectedTarget = null; simState.activeGalaxyData = null; simState.activeSystemData = null;
+    simState.autopilotPriorityTargets = [];
     simState.lastGalaxyVisitTime = 0; simState.visitedSystemsCount = 0; simState.planetTourIndex = 0;
     simState.trackingTarget = null; simState.inspectingTarget = null; simState.inspectingTargetPreviousPos = null;
     simState.bigBangFlash = 0; // Reset flash by default
     
     physicsBodies = []; passiveBodies = []; activeCMEs = [];
     activeBlackHoles = []; blackHoleUniforms.uBHCount.value = 0;
-    elLocBtn.style.display = 'none';
+    elLocBtn.style.display = 'block';
     if(points) points.position.set(0,0,0);
     if(localGalaxy) localGalaxy.visible = false;
     if(localSystem) localSystem.visible = false;
@@ -624,12 +699,14 @@ function completeTransition() {
         if (level === 0) simState.activeGalaxyData = null;
     }
     
-    elLocBtn.style.display = (level > 0) ? 'block' : 'none';
+    elLocBtn.style.display = 'block';
     
     if (level > prevLevel) {
         camera.position.sub(shift); controls.target.sub(shift);
         if (points) points.position.sub(shift);
         if (level === 2 && localGalaxy) localGalaxy.position.sub(shift);
+        if (level === 2 && smbhGroup) smbhGroup.position.sub(shift);
+        if (level === 2 && nebulaSystem) nebulaSystem.position.sub(shift);
     }
     
     // Reset Planet Tour
@@ -651,6 +728,7 @@ function completeTransition() {
         if (smbhGroup) { smbhGroup.visible = true; if(level > prevLevel) smbhGroup.position.set(0,0,0); }
         if (smbhGroup.children.length > 0) activeBlackHoles.push(smbhGroup.children[0]);
         if (nebulaSystem) { nebulaSystem.visible = true; if (level > prevLevel) nebulaSystem.position.set(0,0,0); }
+        if (prevLevel === 0) queueAutopilotGalaxyPriorityTargets();
         if (level > prevLevel) {
             if (simState.isAutopilot) {
                  const dist = SCALES.GALAXY * 1.5; const theta = Math.random() * Math.PI * 2; const phi = Math.random() * Math.PI * 0.5 + 0.1;
@@ -742,7 +820,8 @@ function updateTargetPanel(data, readOnly = false) {
         if (data.state === 'PROTO') typeStr += " (PROTO-STAR)";
         else if (data.state === 'GIANT') typeStr += " (RED GIANT)";
         else if (data.state === 'REMNANT') typeStr += " (REMNANT)";
-        elTType.innerText = typeStr; elTType.style.color = '#' + data.typeObj.color.toString(16).padStart(6,'0');
+        elTType.innerText = typeStr;
+        elTType.style.color = (data.typeObj.id === 'BH') ? '#0f0' : ('#' + data.typeObj.color.toString(16).padStart(6,'0'));
         elTMass.innerText = data.mass + " M☉"; elTRad.innerText = data.radius + " R☉"; elTLum.innerText = data.lum + " L☉";
     } else {
         elTType.innerText = data.type; elTType.style.color = "#0f0";
@@ -807,7 +886,6 @@ function createBlackHole(radius, x, y, z) {
     const disk = new THREE.Mesh(diskGeom, diskMat);
     disk.rotation.x = Math.PI / 2;
     blackHole.add(disk);
-    activeBlackHoles.push(blackHole);
     return blackHole;
 }
 
@@ -1061,6 +1139,7 @@ function generateStarSystem(seedPos) {
         let mesh;
         if (isBH) {
              mesh = createBlackHole(rad, 0, 0, 0);
+             activeBlackHoles.push(mesh);
              mesh.add(new THREE.PointLight(0xffaa44, 100000, SCALES.SYSTEM * 5));
              mesh.add(new THREE.AmbientLight(0x222233, 0.5));
         } else {
@@ -1295,15 +1374,27 @@ function animate() {
                     startTransition(pos, 1);
                 }
             } else if (simState.viewLevel === 1) {
-                 const randIdx = Math.floor(Math.random() * CONFIG.starCount);
-                 if (localGalaxy) {
-                     const posAttr = localGalaxy.geometry.attributes.position;
-                     const pos = new THREE.Vector3(posAttr.getX(randIdx), posAttr.getY(randIdx), posAttr.getZ(randIdx));
-                     const data = getStarSystemInfo(randIdx);
-                     simState.selectedTarget = { level: 1, index: randIdx, position: pos, data: data };
-                     updateTargetPanel(data, true);
-                     startTransition(pos, 2);
-                 }
+                if (simState.autopilotPriorityTargets.length > 0) {
+                    const next = simState.autopilotPriorityTargets.shift();
+                    if (next && next.object && typeof next.object.getWorldPosition === 'function') {
+                        next.object.getWorldPosition(tmpPickPos);
+                        const pos = tmpPickPos.clone();
+                        const data = next.data || getSmbhInfo();
+                        simState.selectedTarget = { level: 1, object: next.object, position: pos, data };
+                        updateTargetPanel(data, true);
+                        startTransition(pos, 2);
+                    }
+                } else {
+                    const randIdx = Math.floor(Math.random() * CONFIG.starCount);
+                    if (localGalaxy) {
+                        const posAttr = localGalaxy.geometry.attributes.position;
+                        const pos = new THREE.Vector3(posAttr.getX(randIdx), posAttr.getY(randIdx), posAttr.getZ(randIdx));
+                        const data = getStarSystemInfo(randIdx);
+                        simState.selectedTarget = { level: 1, index: randIdx, position: pos, data: data };
+                        updateTargetPanel(data, true);
+                        startTransition(pos, 2);
+                    }
+                }
             } else if (simState.viewLevel === 2) {
                 // Autopilot Planet Tour
                 const planets = localSystem.children.filter(c => c.userData && c.userData.type); 
@@ -1335,7 +1426,16 @@ function animate() {
     } else controls.update();
 
     composer.render();
-    if(elTime) elTime.innerText = (simState.viewLevel === 0 ? simState.universeSimTime : simState.galaxySimTime).toFixed(2) + " Bn YR";
+    const simAge = (simState.viewLevel === 0 ? simState.universeSimTime : simState.galaxySimTime);
+    if(elTime) elTime.innerText = simAge.toFixed(2) + " Bn YR";
+    if(elStatusToggle) elStatusToggle.innerText = `[ STATUS ${simAge.toFixed(2)}Bn ]`;
+    
+    if (camera && (elCX || elCY || elCZ)) {
+        tmpWorldPos.copy(camera.position).add(simState.worldOffset);
+        if (elCX) elCX.innerText = formatCoord(tmpWorldPos.x);
+        if (elCY) elCY.innerText = formatCoord(tmpWorldPos.y);
+        if (elCZ) elCZ.innerText = formatCoord(tmpWorldPos.z);
+    }
     elFPS.innerText = Math.round(1 / (delta || 0.001));
 }
 
@@ -1354,12 +1454,37 @@ function onPointerUp(event) {
             updateTargetPanel(data);
         }
     } else if (simState.viewLevel === 1 && localGalaxy) {
-         raycaster.params.Points.threshold = 50000; const intersects = raycaster.intersectObject(localGalaxy);
-         if (intersects.length > 0) {
-             const index = intersects[0].index; const data = getStarSystemInfo(index);
-             simState.selectedTarget = { level: 1, index: index, position: intersects[0].point, data: data };
-             updateTargetPanel(data);
-         }
+        const smbh = (smbhGroup && smbhGroup.visible && smbhGroup.children.length > 0) ? smbhGroup.children[0] : null;
+        if (smbh) {
+            const smbhHits = raycaster.intersectObject(smbh, true);
+            if (smbhHits.length > 0) {
+                const data = getSmbhInfo();
+                smbh.getWorldPosition(tmpPickPos);
+                simState.selectedTarget = { level: 1, object: smbh, position: tmpPickPos.clone(), data };
+                updateTargetPanel(data);
+                return;
+            }
+            tmpPickNdc.copy(smbh.getWorldPosition(tmpPickPos)).project(camera);
+            if (tmpPickNdc.z < 1.0) {
+                const px = rect.left + (tmpPickNdc.x * 0.5 + 0.5) * rect.width;
+                const py = rect.top + (-tmpPickNdc.y * 0.5 + 0.5) * rect.height;
+                const r = Math.max(24, Math.min(rect.width, rect.height) * 0.06);
+                if (Math.hypot(event.clientX - px, event.clientY - py) <= r) {
+                    const data = getSmbhInfo();
+                    simState.selectedTarget = { level: 1, object: smbh, position: tmpPickPos.clone(), data };
+                    updateTargetPanel(data);
+                    return;
+                }
+            }
+        }
+
+        raycaster.params.Points.threshold = 50000;
+        const intersects = raycaster.intersectObject(localGalaxy);
+        if (intersects.length > 0) {
+            const index = intersects[0].index; const data = getStarSystemInfo(index);
+            simState.selectedTarget = { level: 1, index: index, position: intersects[0].point, data: data };
+            updateTargetPanel(data);
+        }
     } else if (simState.viewLevel === 2 && localSystem) {
          raycaster.params.Points.threshold = 1; 
          const intersects = raycaster.intersectObjects(localSystem.children);
